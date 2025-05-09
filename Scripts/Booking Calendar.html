@@ -6,6 +6,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Book Appointment</title>
   <link href="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.9/index.global.min.css" rel="stylesheet">
+  <script src="https://apis.google.com/js/api.js"></script>
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <style>
     body {
       margin: 0;
@@ -14,7 +16,6 @@
       color: white;
     }
 
-    /* Header Styling */
     header {
       position: sticky;
       top: 0;
@@ -62,7 +63,6 @@
       background-color: #e0e0e0;
     }
 
-    /* Hamburger Menu Styling */
     .hamburger {
       display: none;
       font-size: 30px;
@@ -70,7 +70,6 @@
       color: white;
     }
 
-    /* Mobile view */
     @media (max-width: 768px) {
       nav {
         display: none;
@@ -104,7 +103,6 @@
       }
     }
 
-    /* Calendar container */
     #calendar {
       max-width: 1100px;
       margin: 100px auto;
@@ -161,7 +159,6 @@
 
   <div id="calendar"></div>
 
-  <!-- Scripts -->
   <script src="https://cdn.jsdelivr.net/npm/fullcalendar@6.1.9/index.global.min.js"></script>
   <script>
     function toggleNav() {
@@ -169,7 +166,39 @@
       navLinks.classList.toggle('show');
     }
 
+    const CLIENT_ID = '349095680871-30pu2878uld8gjke1p84o91e8n90bs54.apps.googleusercontent.com.apps.googleusercontent.com'; // Replace this!
+    const API_KEY = 'AIzaSyBfbuJHVK25Vk5dAfJJ2fo4J_U9pu3k4Oc';
+    const SCOPES = 'https://www.googleapis.com/auth/calendar.events';
+
+    let tokenClient;
+    let gapiInited = false;
+    let gisInited = false;
+
+    function gapiLoaded() {
+      gapi.load('client', initializeGapiClient);
+    }
+
+    async function initializeGapiClient() {
+      await gapi.client.init({
+        apiKey: API_KEY,
+        discoveryDocs: ["https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest"],
+      });
+      gapiInited = true;
+    }
+
+    function gisLoaded() {
+      tokenClient = google.accounts.oauth2.initTokenClient({
+        client_id: CLIENT_ID,
+        scope: SCOPES,
+        callback: '', // Defined later
+      });
+      gisInited = true;
+    }
+
     window.onload = function () {
+      gapiLoaded();
+      gisLoaded();
+
       const loggedInUser = localStorage.getItem('loggedInUser');
       const makeAccountLink = document.getElementById('makeAccountLink');
       const loginLink = document.getElementById('loginLink');
@@ -218,7 +247,7 @@
         validRange: {
           start: new Date().toISOString().split("T")[0] + "T00:00:00"
         },
-        select: function (info) {
+        select: async function (info) {
           if (isReadOnly) return;
 
           if (!loggedInUser) {
@@ -230,26 +259,52 @@
           }
 
           const confirmed = confirm(`Book a "${serviceName}" on ${info.startStr}?`);
-          if (confirmed) {
-            const endTime = new Date(info.start);
-            endTime.setHours(endTime.getHours() + 1);
+          if (!confirmed) return;
 
-            calendar.addEvent({
-              title: serviceName,
-              start: info.start,
-              end: endTime,
-              allDay: false
-            });
+          const endTime = new Date(info.start);
+          endTime.setHours(endTime.getHours() + 1);
 
-            const users = JSON.parse(localStorage.getItem('users') || '{}');
-            users[loggedInUser].appointments.push({
-              title: serviceName,
-              start: info.start.toISOString(),
-              end: endTime.toISOString()
-            });
-            localStorage.setItem('users', JSON.stringify(users));
+          const newEvent = {
+            title: serviceName,
+            start: info.start,
+            end: endTime,
+            allDay: false
+          };
 
-            alert(`${serviceName} booked!`);
+          calendar.addEvent(newEvent);
+
+          const users = JSON.parse(localStorage.getItem('users') || '{}');
+          users[loggedInUser].appointments.push({
+            title: serviceName,
+            start: info.start.toISOString(),
+            end: endTime.toISOString()
+          });
+          localStorage.setItem('users', JSON.stringify(users));
+
+          alert(`${serviceName} booked!`);
+
+          if (gapiInited && gisInited) {
+            tokenClient.callback = async (resp) => {
+              if (resp.error) {
+                alert("Error during Google Calendar authorization.");
+                return;
+              }
+
+              try {
+                await gapi.client.calendar.events.insert({
+                  calendarId: 'primary',
+                  resource: {
+                    summary: serviceName,
+                    start: { dateTime: info.start.toISOString() },
+                    end: { dateTime: endTime.toISOString() },
+                  }
+                });
+                alert("Google Calendar event created!");
+              } catch (err) {
+                console.error("Failed to insert into Google Calendar:", err);
+              }
+            };
+            tokenClient.requestAccessToken();
           }
         },
 
@@ -269,7 +324,6 @@
           minute: '2-digit',
           hour12: true
         },
-
         dayHeaderFormat: {
           weekday: 'short',
           day: 'numeric',
@@ -279,11 +333,9 @@
 
       calendar.render();
 
-      // Load Google Calendar events
-      const calendarId = 'lslandscape100@gmail.com'; // Google Calendar ID (can be found in Google Calendar settings)
-      const apiKey = 'AIzaSyBfbuJHVK25Vk5dAfJJ2fo4J_U9pu3k4Oc'; // API Key generated from Google Developer Console
-
-      fetch(`https://www.googleapis.com/calendar/v3/calendars/${calendarId}/events?key=${apiKey}`)
+      // Load existing Google Calendar events into calendar view
+      const calendarId = 'lslandscape100@gmail.com';
+      fetch(`https://www.googleapis.com/calendar/v3/calendars/${calendarId}/events?key=${API_KEY}`)
         .then(response => response.json())
         .then(data => {
           const googleEvents = data.items.map(event => ({
@@ -291,8 +343,6 @@
             start: event.start.dateTime || event.start.date,
             end: event.end.dateTime || event.end.date
           }));
-
-          // Add Google Calendar events to the FullCalendar instance
           calendar.addEventSource(googleEvents);
         })
         .catch(error => {
@@ -300,7 +350,7 @@
         });
     });
   </script>
-
 </body>
 
 </html>
+
